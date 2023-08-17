@@ -1,29 +1,22 @@
 /* eslint camelcase: ["error", {properties: "never"}] */
 ( function () {
-	var ravenPromise,
-		errorCount = 0,
-		EVENT_GATE_SHELL = {
-			$schema: '/client/error/1.0.0',
-			meta: { stream: 'client.error' }
-		};
+	var sentryPromise;
 
 	/**
 	 * @return {jQuery.Deferred} a deferred with two values: the Raven.js object and the TraceKit
 	 *   error handler
 	 */
-	function initRaven() {
-		if ( !ravenPromise ) {
-			ravenPromise = mw.loader.using( 'sentry.raven' ).then( function () {
+	function initSentry() {
+		if ( !sentryPromise ) {
+			sentryPromise = mw.loader.using( 'sentry.bundle' ).then( function () {
 				var config = mw.config.get( 'wgSentry' ),
 					options = {},
 					oldOnError,
 					traceKitOnError;
 
 				// If EventGate is configured, this extension will send errors to it.
-				// However, it needs to configure the sentry dsn to initialize Raven
-				if ( config.eventGateUri ) {
-					config.dsn = config.dsn || 'https://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@sentry.io/project';
-				} else if ( !config.dsn ) {
+				// However, it needs to configure the sentry dsn to initialize Sentry
+				if ( !config.dsn ) {
 					mw.log.error( 'See README for how to configure Sentry server' );
 				}
 
@@ -32,65 +25,25 @@
 					options.whitelistUrls.push( location.host );
 				}
 				options.collectWindowErrors = config.logOnError;
-				options.tags = {
-					version: mw.config.get( 'wgVersion' ),
-					debug: mw.config.get( 'debug' ),
-					skin: mw.config.get( 'skin' ),
-					action: mw.config.get( 'wgAction' ),
-					ns: mw.config.get( 'wgNamespaceNumber' ),
-					page_name: mw.config.get( 'wgPageName' ),
-					user_groups: mw.config.get( 'wgUserGroups' ),
-					language: mw.config.get( 'wgUserLanguage' )
-				};
 
-				options.shouldSendCallback = function ( data ) {
-					var eventGateData;
-					// don't flood the server / freeze the client when something generates
-					// an endless stream of errors
-					if ( errorCount++ >= 5 ) {
-						Raven.uninstall();
-						return false;
-					}
-
-					if ( config.eventGateUri ) {
-						// hijack the actual sending and POST to EventGate
-						// TODO: this is for beta testing only, we need to implement it properly as
-						//       we work on productionizing
-						eventGateData = $.extend( {}, EVENT_GATE_SHELL, data );
-
-						// use a flatter format, Sentry's tag syntax doesn't play well with Logstash
-						delete eventGateData.tags;
-						$.each( data.tags, function ( tagName, tagValue ) {
-							eventGateData[ 'tag_' + tagName ] = tagValue;
-						} );
-
-						// Sentry's culprit field is based on script URL, which is not very useful
-						// with ResourceLoader. Provide function-based fields for grouping instead.
-						eventGateData.culprit_function = null;
-						eventGateData.culprit_stack = '';
-						if ( data.stacktrace && data.stacktrace.frames.length ) {
-							eventGateData.culprit_function = data.stacktrace.frames[ 0 ].function;
-							eventGateData.culprit_stack = $.map( data.stacktrace.frames, function ( frame ) {
-								return frame.function;
-							} ).join( ' < ' );
-						}
-
-						$.post( config.eventGateUri, eventGateData )
-							.fail( function ( error ) {
-								mw.log.warn( 'POSTing error to EventGate failed', error );
-							} );
-						return false;
-					}
-
-					return true;
-				};
-
-				// Annoyingly, there is no way to install Raven/TraceKit without it taking over
+				// Annoyingly, there is no way to install Sentry without it taking over
 				// the global error handler (and chaining the old handler after itself).
 				oldOnError = window.onerror;
 				window.onerror = null;
 				try {
-					Raven.config( config.dsn, options ).install();
+					window.Sentry.init({ dsn: config.dsn });
+					window.Sentry.configureScope(
+						function( scope ) {
+							scope.setExtra('version', mw.config.get( 'wgVersion' ));
+							scope.setExtra('debug', mw.config.get( 'debug' ));
+							scope.setExtra('skin', mw.config.get( 'skin' ));
+							scope.setExtra('action', mw.config.get( 'wgAction' ));
+							scope.setExtra('ns', mw.config.get( 'wgNamespaceNumber' ));
+							scope.setExtra('page_name', mw.config.get( 'wgPageName' ));
+							scope.setExtra('user_groups', mw.config.get( 'wgUserGroups' ));
+							scope.setExtra('language', mw.config.get( 'wgUserLanguage' ));
+						}
+					);
 				} catch ( e ) {
 					window.onerror = oldOnError;
 					mw.log.error( e );
@@ -99,10 +52,10 @@
 				traceKitOnError = window.onerror;
 				window.onerror = oldOnError;
 
-				return $.Deferred().resolve( Raven, traceKitOnError );
+				return $.Deferred().resolve( window.Sentry, traceKitOnError );
 			} );
 		}
-		return ravenPromise;
+		return sentryPromise;
 	}
 
 	/**
@@ -115,15 +68,8 @@
 	 * @param {Object} [data.context] Additional key-value pairs to be recorded as Sentry tags
 	 */
 	function report( topic, data ) {
-		mw.sentry.initRaven().done( function ( raven /* , traceKitOnError */ ) {
-			var tags = { source: data.source };
-
-			if ( data.module ) {
-				tags.module = data.module;
-			}
-			$.extend( tags, data.context );
-
-			raven.captureException( data.exception, { tags: tags } );
+		mw.sentry.initSentry().done( function () {
+			window.Sentry.captureException( data.exception );
 		} );
 	}
 
@@ -140,7 +86,7 @@
 	 * @param {Object} data
 	 */
 	function handleGlobalError( topic, data ) {
-		mw.sentry.initRaven().done( function ( raven, traceKitOnError ) {
+		mw.sentry.initSentry().done( function ( traceKitOnError ) {
 			traceKitOnError.call(
 				window,
 				data.errorMessage,
@@ -153,15 +99,15 @@
 	}
 
 	// make these available for unit tests
-	mw.sentry = { initRaven: initRaven, report: report };
+	mw.sentry = { initSentry: initSentry, report: report };
 
 	mw.trackSubscribe( 'resourceloader.exception', report );
 
 	mw.trackSubscribe( 'global.error', handleGlobalError );
 
 	mw.trackSubscribe( 'eventlogging.error', function ( topic, error ) {
-		mw.sentry.initRaven().done( function ( raven /* , traceKitOnError */ ) {
-			raven.captureMessage( error, { source: 'EventLogging' } );
+		mw.sentry.initSentry().done( function () {
+			window.Sentry.captureException( error, { source: 'EventLogging' } );
 		} );
 	} );
 }() );

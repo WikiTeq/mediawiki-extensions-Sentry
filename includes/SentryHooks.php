@@ -66,10 +66,10 @@ class SentryHooks {
 			return;
 		}
 
-		$client = new Raven_Client( $wgSentryDsn );
+		\Sentry\init( [ 'dsn' => $wgSentryDsn ] );
 
 		$data = [
-			'tags' => [
+			'extra' => [
 				'host' => wfHostname(),
 				'wiki' => WikiMap::getCurrentWikiId(),
 				'version' => MW_VERSION,
@@ -84,9 +84,6 @@ class SentryHooks {
 			$data['culprit'] = $e->fname;
 		}
 
-		$client->captureException( $e, $data );
-		if ( $client->getLastError() !== null ) {
-			wfDebugLog( 'sentry', 'Sentry error: ' . $client->getLastError() );
-		}
+		\Sentry\captureException( $e, \Sentry\EventHint::fromArray( $data ) );
 	}
 }

@@ -23,9 +23,9 @@
 				"init.js"
 			]
 		},
-		"sentry.raven": {
+		"sentry.bundle": {
 			"scripts": [
-				"raven/raven.js"
+				"bundle.min.js"
 			]
 		}
 	},
