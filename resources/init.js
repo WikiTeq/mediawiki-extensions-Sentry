@@ -86,7 +86,7 @@
 	 * @param {Object} data
 	 */
 	function handleGlobalError( topic, data ) {
-		mw.sentry.initSentry().done( function ( traceKitOnError ) {
+		mw.sentry.initSentry().done( function ( sentry, traceKitOnError ) {
 			traceKitOnError.call(
 				window,
 				data.errorMessage,
